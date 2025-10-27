@@ -2,14 +2,15 @@
   "compilerOptions": {
     "module": "ES2020",
     "esModuleInterop": true,
-    "target": "es6",
+    "target": "ES2020",
     "moduleResolution": "node",
     "sourceMap": true,
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,
-    "strictNullChecks": true
+    "strictNullChecks": true,
+    "skipLibCheck": true,
+    "lib": ["ES2020", "DOM", "ESNext.Disposable"]
   },
-  "lib": ["es2015"],
   "include": ["src"]
 }
