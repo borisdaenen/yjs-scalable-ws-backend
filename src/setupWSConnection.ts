@@ -1,21 +1,21 @@
-import { WebSocket, Data as WSData } from 'ws';
-import http from 'http';
-import * as Y from 'yjs';
-import * as awarenessProtocol from 'y-protocols/awareness.js'
-import * as syncProtocol from 'y-protocols/sync.js';
-import * as mutex from 'lib0/mutex';
-import * as encoding from 'lib0/encoding';
-import * as decoding from 'lib0/decoding';
-import qs from 'qs';
-import isString from 'lodash/isString.js';
-import {pub, sub} from './pubsub.js';
-import { DocAccessRes, getDocUpdates, postDocUpdate } from './apiClient.js';
-import { serverLogger } from './logger/index.js';
+import http from "http";
+import * as decoding from "lib0/decoding";
+import * as encoding from "lib0/encoding";
+import * as mutex from "lib0/mutex";
+import isString from "lodash/isString.js";
+import qs from "qs";
+import { WebSocket, Data as WSData } from "ws";
+import * as awarenessProtocol from "y-protocols/awareness.js";
+import * as syncProtocol from "y-protocols/sync.js";
+import * as Y from "yjs";
+import { DocAccessRes, getDocUpdates, postDocUpdate } from "./apiClient.js";
+import { serverLogger } from "./logger/index.js";
+import { pub, sub } from "./pubsub.js";
 
-const wsReadyStateConnecting = 0
-const wsReadyStateOpen = 1
-const wsReadyStateClosing = 2 // eslint-disable-line
-const wsReadyStateClosed = 3 // eslint-disable-line
+const wsReadyStateConnecting = 0;
+const wsReadyStateOpen = 1;
+const wsReadyStateClosing = 2; // eslint-disable-line
+const wsReadyStateClosed = 3; // eslint-disable-line
 
 const updatesLimit = 50;
 
@@ -30,32 +30,32 @@ export const connAccesses = new Map<WebSocket, ConnAccess>();
 
 export class InvalidReqError extends Error {
   constructor() {
-    super('invalid ws req');
+    super("invalid ws req");
   }
 }
 
 export class ConnAccess {
   token: string;
-  access: DocAccessRes['access'];
+  access: DocAccessRes["access"];
 
-  constructor(token: string, access: DocAccessRes['access']) {
+  constructor(token: string, access: DocAccessRes["access"]) {
     this.token = token;
     this.access = access;
   }
 }
 
 export const getDocIdFromReq = (req: any): string => {
-  const docId = req.url.slice(1).split('?')[0];
-  
+  const docId = req.url.slice(1).split("?")[0];
+
   if (!isString(docId)) {
     throw new InvalidReqError();
   }
 
-  return docId
-}
+  return docId;
+};
 
 export const getTokenFromReq = (req: any): string => {
-  const [, query] = req.url.split('?');
+  const [, query] = req.url.split("?");
   const data = qs.parse(query);
   const token = data.token;
 
@@ -64,28 +64,32 @@ export const getTokenFromReq = (req: any): string => {
   }
 
   return token;
-}
+};
 
 export function cleanup() {
   docs.forEach((doc) => {
     doc.conns.forEach((_, conn) => {
       closeConn(doc, conn);
-    })
-  })
+    });
+  });
 
   connAccesses.forEach((_, conn) => {
     connAccesses.delete(conn);
   });
 }
 
-export default async function setupWSConnection(conn: WebSocket, req: http.IncomingMessage, connAccess: ConnAccess): Promise<void> {
-  conn.binaryType = 'arraybuffer';
+export default async function setupWSConnection(
+  conn: WebSocket,
+  req: http.IncomingMessage,
+  connAccess: ConnAccess
+): Promise<void> {
+  conn.binaryType = "arraybuffer";
   const docId: string = getDocIdFromReq(req);
   const [doc, isNew] = getYDoc(docId);
   doc.conns.set(conn, new Set());
   connAccesses.set(conn, connAccess);
-  
-  conn.on('message', (message: WSData) => {
+
+  conn.on("message", (message: WSData) => {
     messageListener(conn, req, doc, new Uint8Array(message as ArrayBuffer));
   });
 
@@ -120,12 +124,12 @@ export default async function setupWSConnection(conn: WebSocket, req: http.Incom
     }
   }, pingTimeout);
 
-  conn.on('close', () => {
+  conn.on("close", () => {
     closeConn(doc, conn);
     clearInterval(pingInterval);
   });
 
-  conn.on('pong', () => {
+  conn.on("pong", () => {
     pongReceived = true;
   });
 
@@ -141,13 +145,24 @@ export default async function setupWSConnection(conn: WebSocket, req: http.Incom
     if (awarenessStates.size > 0) {
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, messageAwareness);
-      encoding.writeVarUint8Array(encoder, awarenessProtocol.encodeAwarenessUpdate(doc.awareness, Array.from(awarenessStates.keys())));
-      send(doc, conn, encoding.toUint8Array(encoder));      
+      encoding.writeVarUint8Array(
+        encoder,
+        awarenessProtocol.encodeAwarenessUpdate(
+          doc.awareness,
+          Array.from(awarenessStates.keys())
+        )
+      );
+      send(doc, conn, encoding.toUint8Array(encoder));
     }
   }
 }
 
-export const messageListener = async (conn: WebSocket, req: http.IncomingMessage, doc: WSSharedDoc, message: Uint8Array): Promise<void> => {
+export const messageListener = async (
+  conn: WebSocket,
+  req: http.IncomingMessage,
+  doc: WSSharedDoc,
+  message: Uint8Array
+): Promise<void> => {
   // TODO: authenticate request
   const encoder = encoding.createEncoder();
   const decoder = decoding.createDecoder(message);
@@ -156,28 +171,29 @@ export const messageListener = async (conn: WebSocket, req: http.IncomingMessage
     case messageSync: {
       const connAccess = connAccesses.get(conn);
 
-      if (connAccess && connAccess.access === 'rw') {
+      if (connAccess && connAccess.access === "rw") {
         encoding.writeVarUint(encoder, messageSync);
         syncProtocol.readSyncMessage(decoder, encoder, doc, conn);
-        
+
         if (encoding.length(encoder) > 1) {
           send(doc, conn, encoding.toUint8Array(encoder));
         }
       }
-  
+
       break;
     }
     case messageAwareness: {
       const update = decoding.readVarUint8Array(decoder);
-      pub.publishBuffer(doc.awarenessChannel, Buffer.from(update));
-      awarenessProtocol.applyAwarenessUpdate(doc.awareness, update , conn);
+      pub.publish(doc.awarenessChannel, Buffer.from(update));
+      awarenessProtocol.applyAwarenessUpdate(doc.awareness, update, conn);
       break;
     }
-    default: throw new Error('unreachable');
+    default:
+      throw new Error("unreachable");
   }
-}
+};
 
-export const getYDoc = (docId: string, gc=true): [WSSharedDoc, boolean] => {
+export const getYDoc = (docId: string, gc = true): [WSSharedDoc, boolean] => {
   const existing = docs.get(docId);
   if (existing) {
     return [existing, false];
@@ -189,14 +205,18 @@ export const getYDoc = (docId: string, gc=true): [WSSharedDoc, boolean] => {
   docs.set(docId, doc);
 
   return [doc, true];
-}
+};
 
 export const closeConn = (doc: WSSharedDoc, conn: WebSocket): void => {
   const controlledIds = doc.conns.get(conn);
   if (controlledIds) {
     doc.conns.delete(conn);
-    awarenessProtocol.removeAwarenessStates(doc.awareness, Array.from(controlledIds), null);
-    
+    awarenessProtocol.removeAwarenessStates(
+      doc.awareness,
+      Array.from(controlledIds),
+      null
+    );
+
     if (doc.conns.size === 0) {
       doc.destroy();
       docs.delete(doc.id);
@@ -206,15 +226,22 @@ export const closeConn = (doc: WSSharedDoc, conn: WebSocket): void => {
   connAccesses.delete(conn);
 
   conn.close();
-}
+};
 
-export const send = (doc: WSSharedDoc, conn: WebSocket, m: Uint8Array): void => {
-  if (conn.readyState !== wsReadyStateConnecting && conn.readyState !== wsReadyStateOpen) {
+export const send = (
+  doc: WSSharedDoc,
+  conn: WebSocket,
+  m: Uint8Array
+): void => {
+  if (
+    conn.readyState !== wsReadyStateConnecting &&
+    conn.readyState !== wsReadyStateOpen
+  ) {
     closeConn(doc, conn);
   }
 
   try {
-    conn.send(m, err => {
+    conn.send(m, (err) => {
       if (err) {
         closeConn(doc, conn);
       }
@@ -222,7 +249,7 @@ export const send = (doc: WSSharedDoc, conn: WebSocket, m: Uint8Array): void => 
   } catch (e) {
     closeConn(doc, conn);
   }
-}
+};
 
 export const propagateUpdate = (doc: WSSharedDoc, update: Uint8Array) => {
   const encoder = encoding.createEncoder();
@@ -230,29 +257,32 @@ export const propagateUpdate = (doc: WSSharedDoc, update: Uint8Array) => {
   syncProtocol.writeUpdate(encoder, update);
   const message = encoding.toUint8Array(encoder);
   doc.conns.forEach((_, conn) => send(doc, conn, message));
-}
+};
 
-export const updateHandler = async (update: Uint8Array, origin: any, doc: WSSharedDoc): Promise<void> => {
+export const updateHandler = async (
+  update: Uint8Array,
+  origin: any,
+  doc: WSSharedDoc
+): Promise<void> => {
   const isOriginWSConn = origin instanceof WebSocket && doc.conns.has(origin);
 
   if (isOriginWSConn) {
     const connAccess = connAccesses.get(origin);
-    if (connAccess && connAccess.access === 'rw') {
-      pub.publishBuffer(doc.id, Buffer.from(update)).catch((err) => {
+    if (connAccess && connAccess.access === "rw") {
+      pub.publish(doc.id, Buffer.from(update)).catch((err) => {
         serverLogger.error(err);
       });
 
       propagateUpdate(doc, update);
 
-      postDocUpdate(doc.id, update, connAccess.token)
-        .catch(() => {
-          closeConn(doc, origin);
-        })
+      postDocUpdate(doc.id, update, connAccess.token).catch(() => {
+        closeConn(doc, origin);
+      });
     }
   } else {
     propagateUpdate(doc, update);
   }
-}
+};
 
 export class WSSharedDoc extends Y.Doc {
   id: string;
@@ -265,50 +295,70 @@ export class WSSharedDoc extends Y.Doc {
     super();
 
     this.id = id;
-    this.awarenessChannel = `${id}-awareness`
+    this.awarenessChannel = `${id}-awareness`;
     this.mux = mutex.createMutex();
     this.conns = new Map();
     this.awareness = new awarenessProtocol.Awareness(this);
 
-    const awarenessChangeHandler = ({added, updated, removed}: {added: number[], updated: number[], removed: number[]}, origin: any) => {
+    const awarenessChangeHandler = (
+      {
+        added,
+        updated,
+        removed,
+      }: { added: number[]; updated: number[]; removed: number[] },
+      origin: any
+    ) => {
       const changedClients = added.concat(updated, removed);
       const connControlledIds = this.conns.get(origin);
       if (connControlledIds) {
-        added.forEach(clientId => { connControlledIds.add(clientId); });
-        removed.forEach(clientId => { connControlledIds.delete(clientId); });
+        added.forEach((clientId) => {
+          connControlledIds.add(clientId);
+        });
+        removed.forEach((clientId) => {
+          connControlledIds.delete(clientId);
+        });
       }
 
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, messageAwareness);
-      encoding.writeVarUint8Array(encoder, awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients));
+      encoding.writeVarUint8Array(
+        encoder,
+        awarenessProtocol.encodeAwarenessUpdate(this.awareness, changedClients)
+      );
       const buff = encoding.toUint8Array(encoder);
-      
+
       this.conns.forEach((_, c) => {
         send(this, c, buff);
       });
-    }
+    };
 
-    this.awareness.on('update', awarenessChangeHandler);
-    this.on('update', updateHandler);
+    this.awareness.on("update", awarenessChangeHandler);
+    this.on("update", (update) => {
+      void updateHandler(update as unknown as Uint8Array, this, this);
+    });
 
-    sub.subscribe([this.id, this.awarenessChannel]).then(() => {
-      sub.on('messageBuffer', (channel, update) => {
+    sub.subscribe(this.id, this.awarenessChannel).then(() => {
+      sub.on("messageBuffer", (channel, update) => {
         const channelId = channel.toString();
 
         // update is a Buffer, Buffer is a subclass of Uint8Array, update can be applied
         // as an update directly
 
         if (channelId === this.id) {
-          Y.applyUpdate(this, update, sub);
+          Y.applyUpdate(this, update as unknown as Uint8Array, sub);
         } else if (channelId === this.awarenessChannel) {
-          awarenessProtocol.applyAwarenessUpdate(this.awareness, update, sub);
+          awarenessProtocol.applyAwarenessUpdate(
+            this.awareness,
+            update as unknown as Uint8Array,
+            sub
+          );
         }
-      })
-    })
+      });
+    });
   }
 
   destroy() {
     super.destroy();
-    sub.unsubscribe([this.id, this.awarenessChannel]);
+    sub.unsubscribe(this.id, this.awarenessChannel);
   }
 }
